@@ -1,4 +1,4 @@
-"""Fitbit Recovery Lab — athletic-themed Streamlit dashboard (SQL + stats + ML)."""
+import random
 import time
 
 import numpy as np
@@ -103,9 +103,6 @@ section[data-testid="stSidebar"] {{background:#0D1320;border-right:1px solid rgb
 section[data-testid="stSidebar"] * {{color:#F3F4F6}}
 section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{color:#AEB6C4 !important}}
 </style>
-<div class="hero"><div class="kicker">STRAVA-STYLE FITNESS ANALYTICS</div><h1>Recovery Lab</h1>
-<p>33 real Fitbit athletes, 30 days of steps, sleep and heart rate. Does more movement mean better recovery? Explore it with SQL, statistics and ML.</p>
-<svg viewBox="0 0 600 80" preserveAspectRatio="none"><polyline points="{ECG}"/></svg></div>
 """, unsafe_allow_html=True)
 
 
@@ -134,6 +131,15 @@ def gauge(val, goal, title, suffix=""):
                                           bgcolor="rgba(255,255,255,.06)", borderwidth=0,
                                           threshold=dict(line=dict(color="white", width=4), value=goal))))
     return f
+
+
+def set_aid(i):
+    st.session_state["aid"] = i
+
+
+def sleep_gap(d):
+    s_ = d.dropna(subset=["TotalMinutesAsleep"])
+    return (s_[s_.TotalSteps >= 10000].TotalMinutesAsleep.mean(), s_[s_.TotalSteps < 5000].TotalMinutesAsleep.mean())
 
 
 def chip(txt, on):
@@ -168,6 +174,11 @@ except Exception as e:  # noqa: BLE001
     st.error(f"Could not load data: {e}")
     st.stop()
 
+ndays = (df.Date.max() - df.Date.min()).days + 1
+st.markdown(f"""<div class="hero"><div class="kicker">STRAVA-STYLE FITNESS ANALYTICS</div><h1>Recovery Lab</h1>
+<p>{df.Id.nunique()} real Fitbit athletes, {ndays} days of steps, sleep and heart rate. Does more movement mean better recovery? Tap a bar, badge or athlete to dig in.</p>
+<svg viewBox="0 0 600 80" preserveAspectRatio="none"><polyline points="{ECG}"/></svg></div>""", unsafe_allow_html=True)
+
 k = st.columns(5)
 k[0].metric("Athletes", df.Id.nunique())
 k[1].metric("User-days", f"{len(df):,}")
@@ -182,7 +193,11 @@ with tabs[0]:
     ids = [int(i) for i in sorted(df.Id.unique())]
     lab = {i: f"Athlete {n + 1:02d} · …{str(i)[-4:]}" for n, i in enumerate(ids)}
     c1, c2, c3 = st.columns([2, 1, 1])
-    aid = c1.selectbox("Pick an athlete", ids, format_func=lambda i: lab[i])
+    lab_inv = {v: k_ for k_, v in lab.items()}
+    if st.session_state.get("aid") not in ids:
+        st.session_state["aid"] = ids[0]
+    aid = c1.selectbox("Pick an athlete", ids, format_func=lambda i: lab[i], key="aid")
+    c1.button("🎲 Surprise me", on_click=set_aid, args=(random.choice(ids),))
     goal = c2.slider("Daily step goal", 5000, 20000, 10000, 500)
     sgoal = c3.slider("Sleep goal (h)", 6.0, 9.0, 7.0, 0.5)
     a = df[df.Id == aid].sort_values("Date")
@@ -205,24 +220,70 @@ with tabs[0]:
 
     n_goal = int((a.TotalSteps >= goal).sum())
     pct_sleep = (sl >= sgoal * 60).mean() if len(sl) else 0
-    tip = (f"You average **{steps:,.0f}** steps, **{goal - steps:,.0f}** short of your goal — a brisk 15-minute walk adds roughly 1,500."
-           if steps < goal else f"Goal smashed on average (**{steps:,.0f}** steps).")
+    run_ = best_run = 0
+    for v_ in (a.TotalSteps >= goal):
+        run_ = run_ + 1 if v_ else 0
+        best_run = max(best_run, run_)
+    hr_on = bool(a.HR_mean.notna().any())
+    mc = st.columns(4)
+    mc[0].metric("Goal days", f"{n_goal} / {len(a)}")
+    mc[1].metric("Best streak", f"{best_run} days")
+    mc[2].metric("Sleep-goal nights", f"{int((sl >= sgoal * 60).sum())} / {len(sl)}" if has_sleep else "—")
+    mc[3].metric("Peak day", f"{a.TotalSteps.max():,.0f} steps")
+
+    hi_, lo_ = sleep_gap(df)
+    tip = (f"You average <b>{steps:,.0f}</b> steps, <b>{goal - steps:,.0f}</b> short of your goal — a brisk 15-minute walk adds roughly 1,500."
+           if steps < goal else f"Goal smashed on average (<b>{steps:,.0f}</b> steps).")
     if has_sleep and sleep_h < sgoal:
-        tip += f" Sleep is **{sleep_h:.1f} h** vs {sgoal:g} h: in this dataset 10k+ step days go with ~58 min less sleep, so try earlier-day workouts."
+        tip += f" Sleep is <b>{sleep_h:.1f} h</b> vs {sgoal:g} h."
+        if lo_ - hi_ > 0:
+            tip += f" Across the cohort, 10k+ step days go with ~{lo_ - hi_:.0f} min less sleep than &lt;5k days, so try earlier-day workouts."
+
+    BADGES = {
+        "🔥 Goal crusher": (n_goal >= 3, n_goal / 3, f"Hit your step goal on 3+ days ({n_goal} so far)."),
+        "🌙 Sleep champion": (has_sleep and pct_sleep >= .6, pct_sleep / .6, f"Reach your sleep goal on 60% of logged nights ({pct_sleep * 100:.0f}% so far)."),
+        "⚡ Intensity beast": (very >= 20, very / 20, f"Average 20+ very-active minutes a day ({very:.0f} so far)."),
+        "📅 Consistent": (len(a) >= 28, len(a) / 28, f"Log 28+ days ({len(a)} so far)."),
+        "❤️ Heart-tracked": (hr_on, 1.0 if hr_on else 0.0, "Have heart-rate data recorded."),
+    }
     b1, b2 = st.columns([3, 2])
-    b1.markdown('<div class="card"><b>BADGES</b><br>' + chip(f"🔥 Goal crusher · {n_goal} days", n_goal >= 3)
-                + chip("🌙 Sleep champion", has_sleep and pct_sleep >= .6) + chip("⚡ Intensity beast", very >= 20)
-                + chip("📅 Consistent · 28+ days", len(a) >= 28) + chip("❤️ Heart-tracked", a.HR_mean.notna().any()) + "</div>",
-                unsafe_allow_html=True)
+    with b1:
+        st.markdown('<div class="card"><b>BADGES</b> — tap one to see how it is earned</div>', unsafe_allow_html=True)
+        pick = st.pills("Badges", list(BADGES), format_func=lambda n_: ("✅ " if BADGES[n_][0] else "🔒 ") + n_,
+                        label_visibility="collapsed", key=f"badge_{aid}")
+        if pick:
+            ok_, prog_, rule_ = BADGES[pick]
+            st.progress(float(min(max(prog_, 0), 1)), text=("Earned! " if ok_ else "Not yet. ") + rule_)
     b2.markdown(f'<div class="card"><b>COACH SAYS</b><br>{tip}</div>', unsafe_allow_html=True)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
-    fig.add_bar(x=a.Date, y=a.TotalSteps, name="Steps", marker_color=[ORANGE if s >= goal else GREY for s in a.TotalSteps], secondary_y=False)
+    fig.add_bar(x=a.Date, y=a.TotalSteps, name="Steps", marker_color=[ORANGE if s >= goal else GREY for s in a.TotalSteps], secondary_y=False,
+                hovertemplate="%{x|%a %d %b}<br>%{y:,.0f} steps<extra></extra>")
     if has_sleep:
-        fig.add_scatter(x=a.Date, y=a.TotalMinutesAsleep / 60, name="Sleep (h)", mode="lines+markers", line=dict(color=TEAL, width=3), secondary_y=True)
-    fig.add_hline(y=goal, line_dash="dash", line_color="white", annotation_text="goal", secondary_y=False)
-    fig.update_layout(title="Daily steps (orange = goal hit) vs sleep", legend=dict(orientation="h", y=1.12))
-    show(fig, 360)
+        fig.add_scatter(x=a.Date, y=a.TotalMinutesAsleep / 60, name="Sleep (h)", mode="lines+markers", connectgaps=True,
+                        line=dict(color=TEAL, width=3), secondary_y=True)
+        fig.add_hline(y=sgoal, line_dash="dot", line_color=TEAL, annotation_text="sleep goal", annotation_position="top left", secondary_y=True)
+    fig.add_hline(y=goal, line_dash="dash", line_color="white", annotation_text="step goal", secondary_y=False)
+    fig.update_layout(title="Daily steps (orange = goal hit) vs sleep",
+                      legend=dict(orientation="h", y=1.04, yanchor="bottom", x=0, xanchor="left"))
+    fig.update_yaxes(title_text="Steps", secondary_y=False)
+    fig.update_yaxes(title_text="Sleep (h)", range=[0, 12], dtick=2, showgrid=False, secondary_y=True)
+    ev = st.plotly_chart(style(fig, 380).update_layout(margin=dict(t=90, b=10, l=10, r=10)), width="stretch",
+                         on_select="rerun", selection_mode="points", key=f"day_{aid}")
+    pts = [p for p in (ev.selection.points if ev and ev.selection else []) if p.get("x") is not None]
+    if pts:
+        d0 = pd.to_datetime(pts[0]["x"]).normalize()
+        r_ = a[a.Date.dt.normalize() == d0]
+        if len(r_):
+            r_ = r_.iloc[0]
+            dc = st.columns(5)
+            dc[0].metric(d0.strftime("%a %d %b"), f"{r_.TotalSteps:,.0f} steps", f"{r_.TotalSteps - goal:+,.0f} vs goal")
+            dc[1].metric("Very active", f"{r_.VeryActiveMinutes:.0f} min")
+            dc[2].metric("Calories", f"{r_.Calories:,.0f}")
+            dc[3].metric("Sleep", f"{r_.TotalMinutesAsleep / 60:.1f} h" if pd.notna(r_.TotalMinutesAsleep) else "not logged")
+            dc[4].metric("Avg heart rate", f"{r_.HR_mean:.0f} bpm" if pd.notna(r_.HR_mean) else "n/a")
+    else:
+        st.caption("👆 Click any bar to open that day's breakdown.")
 
     c1, c2 = st.columns(2)
     a2 = a.assign(wk=(a.Date - pd.to_timedelta(a.Date.dt.dayofweek, unit="D")).dt.normalize(), dow=a.Date.dt.dayofweek)
@@ -232,12 +293,24 @@ with tabs[0]:
                                 hovertemplate="%{y}, week of %{x}<br>%{z:,.0f} steps<extra></extra>"))
     heat.update_layout(title="Training calendar", yaxis=dict(autorange="reversed"))
     c1.plotly_chart(style(heat, 300), width="stretch")
-    coh = {"Steps": df.TotalSteps.mean(), "Very-active min": df.VeryActiveMinutes.mean(), "Calories": df.Calories.mean()}
-    me = {"Steps": steps, "Very-active min": very, "Calories": a.Calories.mean()}
-    cmp_ = pd.DataFrame({"metric": list(coh), "pct_of_cohort": [me[m] / coh[m] * 100 for m in coh]})
-    f = bar(cmp_, "metric", "pct_of_cohort", "You vs cohort average (100% = average)")
-    f.add_hline(y=100, line_dash="dash", line_color="white")
-    c2.plotly_chart(style(f, 300), width="stretch")
+    M = {"Steps": "TotalSteps", "Very active": "VeryActiveMinutes", "Fairly active": "FairlyActiveMinutes",
+         "Lightly active": "LightlyActiveMinutes", "Calories": "Calories"}
+    coh = df[list(M.values())].mean()
+    rv = c2.selectbox("⚔️ Compare with", [None] + [i_ for i_ in ids if i_ != aid],
+                      format_func=lambda i_: "Cohort average only" if i_ is None else lab[i_])
+    th = list(M) + [list(M)[0]]
+
+    def pct(d_):
+        v_ = [d_[c_].mean() / coh[c_] * 100 for c_ in M.values()]
+        return v_ + v_[:1]
+    radar = go.Figure()
+    radar.add_scatterpolar(r=[100] * len(th), theta=th, name="Cohort avg", line=dict(color="white", dash="dash"))
+    if rv is not None:
+        radar.add_scatterpolar(r=pct(df[df.Id == rv]), theta=th, name=lab[rv], fill="toself", line=dict(color=TEAL))
+    radar.add_scatterpolar(r=pct(a), theta=th, name=lab[aid], fill="toself", line=dict(color=ORANGE))
+    radar.update_layout(title="Athlete vs cohort (100% = average)", polar=dict(bgcolor="rgba(255,255,255,.04)",
+                        radialaxis=dict(gridcolor="rgba(255,255,255,.15)", ticksuffix="%")))
+    c2.plotly_chart(style(radar, 340), width="stretch")
     if a.HR_mean.notna().any():
         hr = go.Figure()
         for c, col in [("HR_max", ORANGE), ("HR_mean", LIME), ("HR_min", TEAL)]:
@@ -252,9 +325,16 @@ with tabs[1]:
     m = c1.radio("Rank athletes by", list(opts), horizontal=True)
     n = c2.slider("Show top", 5, 15, 10)
     lb = df.groupby("Id")[opts[m]].mean().dropna().sort_values(ascending=False).head(n).reset_index()
-    lb["Athlete"] = lb.Id.map(lambda i: f"…{str(i)[-4:]}")
+    lb["Athlete"] = lb.Id.map(lab)
     f = px.bar(lb.iloc[::-1], x=opts[m], y="Athlete", orientation="h", text_auto=".0f", title=f"Top {n} by {m.lower()}", color_discrete_sequence=[ORANGE])
-    show(f, 90 + 34 * n)
+    evl = st.plotly_chart(style(f, 90 + 34 * n), width="stretch", on_select="rerun", selection_mode="points", key="lb_chart")
+    lp = [p for p in (evl.selection.points if evl and evl.selection else []) if p.get("y") in lab_inv]
+    if lp:
+        sid = lab_inv[lp[0]["y"]]
+        st.button(f"🏃 Open {lp[0]['y']} in Athlete Passport", on_click=set_aid, args=(sid,), type="primary")
+        st.caption("Loaded. Now switch to the Athlete Passport tab.")
+    else:
+        st.caption("👆 Click a bar to pick an athlete, then open their passport.")
     seg = q("segments")
     c1, c2 = st.columns(2)
     c1.plotly_chart(style(bar(seg, "segment", "users", "Athletes per activity segment"), 320), width="stretch")
@@ -459,7 +539,10 @@ with tabs[5]:
         f.add_hline(y=.5, line_dash="dash", line_color="white")
         show(f, 340)
         best = res[res.model != "Baseline (majority)"].iloc[0]
-        st.warning(f"Honest result: best model = {best.model} (AUC {best.roc_auc:.2f}). Daily activity alone barely predicts sleep — a useful negative finding.")
+        if best.roc_auc < 0.6:
+            st.warning(f"Honest result: best model = {best.model} (AUC {best.roc_auc:.2f}). Daily activity alone barely predicts sleep — a useful negative finding.")
+        else:
+            st.success(f"Best model = {best.model} (AUC {best.roc_auc:.2f}). Activity carries some signal about sleep, but it is far from a reliable predictor.")
         st.subheader("🎛️ Sleep predictor (illustrative)")
         model = an.fit_best(df, best.model)
         c = st.columns(4)
@@ -478,19 +561,33 @@ with tabs[5]:
 # ============ Insights
 with tabs[6]:
     s = df.dropna(subset=["TotalMinutesAsleep"])
-    hi, lo = s[s.TotalSteps >= 10000].TotalMinutesAsleep.mean(), s[s.TotalSteps < 5000].TotalMinutesAsleep.mean()
+    hi, lo = sleep_gap(df)
+    raw = get_data(False)
+    nonwear = (1 - len(get_data(True)) / len(raw)) * 100
+    n_all = raw.Id.nunique()
+    n_sleep, n_hr = raw.dropna(subset=["TotalMinutesAsleep"]).Id.nunique(), raw.dropna(subset=["HR_mean"]).Id.nunique()
+    wcol = next((c_ for c_ in raw.columns if "weight" in c_.lower()), None)
+    n_w = raw.dropna(subset=[wcol]).Id.nunique() if wcol else None
+    try:
+        wk_p = stats.mannwhitneyu(df[df.IsWeekend == 1].TotalSteps, df[df.IsWeekend == 0].TotalSteps).pvalue
+        wk_txt = "**No weekend effect** on steps." if wk_p >= .05 else "**Weekends differ** in steps (p < 0.05)."
+    except Exception:  # noqa: BLE001
+        wk_txt = ""
+    gap = lo - hi
+    gap_txt = (f"**10k+ step days → ~{gap:.0f} min less sleep** than <5k days ({hi:.0f} vs {lo:.0f} min)" if gap > 0
+               else f"**10k+ step days → ~{-gap:.0f} min more sleep** than <5k days ({hi:.0f} vs {lo:.0f} min)")
     st.markdown(f"""
 ### Key findings
-- **10k+ step days → ~{lo - hi:.0f} min less sleep** than <5k days ({hi:.0f} vs {lo:.0f} min) — significant, small effect.
+- {gap_txt} — small effect, pooled user-days.
 - **{(s.TotalMinutesAsleep < 420).mean() * 100:.0f}% of logged nights are under 7 h.**
 - More very-active minutes go with a **lower minimum heart rate** (fitness signal).
-- **No weekend effect** on steps. Activity alone barely predicts sleep (AUC ≈ 0.5).
+- {wk_txt} Activity alone is a weak predictor of sleep (see ML Lab).
 
 ### Recommendations (Bellabeat-style, for the marketing team)
-1. **Wear detection:** flag non-wear days so metrics aren't distorted (7.7% of days here).
+1. **Wear detection:** flag non-wear days so metrics aren't distorted ({nonwear:.1f}% of days here).
 2. **Smart nudges:** notify inactive users; suggest earlier-day workouts to protect sleep.
 3. **Sleep-debt alerts** after 3+ nights under 7 h (see SQL Lab watchlist).
-4. **Collect more data:** only 24 / 14 / 8 of 33 athletes have sleep / heart-rate / weight data; add self-reported stress and mood.
+4. **Collect more data:** only {n_sleep} / {n_hr}{f' / {n_w}' if n_w is not None else ''} of {n_all} athletes have sleep / heart-rate{' / weight' if n_w is not None else ''} data; add self-reported stress and mood.
 
-*Limitations: 33 users, 30 days, pooled user-days, observational data (no causality).*
+*Limitations: {n_all} users, {ndays} days, pooled user-days, observational data (no causality).*
 """)

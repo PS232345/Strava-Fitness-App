@@ -1,3 +1,6 @@
+"""Fitbit Recovery Lab — athletic-themed Streamlit dashboard (SQL + stats + ML)."""
+import time
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -83,6 +86,7 @@ a {{color:#5EEAD4 !important}}
 .stButton button[kind="primary"] {{background:{ORANGE};border-color:{ORANGE};color:#fff}}
 .stButton button:hover, .stDownloadButton button:hover {{border-color:{ORANGE};color:#fff}}
 
+.stTextArea textarea {{font-family:'JetBrains Mono',Consolas,monospace !important;font-size:.92rem;line-height:1.55;background:#0A0F1A !important;border-left:4px solid {ORANGE} !important}}
 /* ---------- ALERTS, CARDS, CHIPS ---------- */
 [data-testid="stAlert"] {{background:rgba(255,255,255,.07) !important;border:1px solid rgba(255,255,255,.16);border-radius:12px}}
 [data-testid="stAlert"] p, [data-testid="stAlert"] div {{color:#F3F4F6 !important}}
@@ -308,19 +312,142 @@ with tabs[3]:
         st.dataframe(an.missingness(df), hide_index=True, width="stretch")
         st.dataframe(q("completeness"), hide_index=True, width="stretch")
 
-# ============ SQL Lab
+# ============ SQL Lab  (playground)
+CHALLENGES = [
+    ("⭐ Warm-up: top steppers", "Return each athlete's `Id` and their average `TotalSteps` (call it `avg_steps`), highest first. Top 5 only.",
+     "GROUP BY Id, AVG(...), ORDER BY ... DESC, LIMIT 5",
+     "SELECT Id, AVG(TotalSteps) AS avg_steps FROM daily GROUP BY Id ORDER BY avg_steps DESC LIMIT 5"),
+    ("⭐ Sleep debt", "How many logged athlete-days had **less than 7 hours** (420 min) of sleep? One number, call it `nights`.",
+     "COUNT(*) with WHERE TotalMinutesAsleep < 420",
+     "SELECT COUNT(*) AS nights FROM daily WHERE TotalMinutesAsleep < 420"),
+    ("⭐⭐ Heavy movers", "Which athletes average **more than 20 very-active minutes** a day? Return `Id` and `v` (the average), highest first.",
+     "GROUP BY Id, then HAVING (not WHERE) to filter on an aggregate",
+     "SELECT Id, AVG(VeryActiveMinutes) AS v FROM daily GROUP BY Id HAVING v > 20 ORDER BY v DESC"),
+    ("⭐⭐ Peak hour", "Using `hourly`, find the hour of day (0-23) with the highest average `StepTotal`. Return `hr` and `avg_steps`, one row.",
+     "CAST(strftime('%H', Hour) AS INTEGER) gives the hour",
+     "SELECT CAST(strftime('%H',Hour) AS INTEGER) AS hr, AVG(StepTotal) AS avg_steps FROM hourly GROUP BY hr ORDER BY avg_steps DESC LIMIT 1"),
+    ("⭐⭐⭐ Calorie podium", "Rank athletes by average `Calories` with a window function. Return `Id`, `avg_cal`, `rnk` for ranks 1-3.",
+     "RANK() OVER (ORDER BY AVG(Calories) DESC) inside a GROUP BY query",
+     "SELECT Id, AVG(Calories) AS avg_cal, RANK() OVER (ORDER BY AVG(Calories) DESC) AS rnk FROM daily GROUP BY Id ORDER BY rnk LIMIT 3"),
+]
+SNIPPETS = {
+    "Peek at the data": "SELECT *\nFROM daily\nLIMIT 10;",
+    "Filter + sort": "SELECT Id, TotalSteps, Calories\nFROM daily\nWHERE TotalSteps > 15000\nORDER BY TotalSteps DESC\nLIMIT 20;",
+    "GROUP BY + HAVING": "SELECT Id, COUNT(*) AS days, ROUND(AVG(TotalSteps)) AS avg_steps\nFROM daily\nGROUP BY Id\nHAVING days >= 20\nORDER BY avg_steps DESC;",
+    "CASE bucketing": "SELECT CASE WHEN TotalSteps >= 10000 THEN '1 Active'\n            WHEN TotalSteps >= 5000  THEN '2 Moderate'\n            ELSE '3 Low' END AS band,\n       COUNT(*) AS days,\n       ROUND(AVG(TotalMinutesAsleep)) AS avg_sleep\nFROM daily\nWHERE TotalMinutesAsleep IS NOT NULL\nGROUP BY band\nORDER BY band;",
+    "CTE": "WITH per_user AS (\n  SELECT Id, AVG(TotalSteps) AS steps, AVG(TotalMinutesAsleep) AS sleep\n  FROM daily GROUP BY Id\n)\nSELECT * FROM per_user\nWHERE sleep IS NOT NULL\nORDER BY steps DESC;",
+    "Window: RANK": "SELECT Id, ROUND(AVG(Calories)) AS avg_cal,\n       RANK() OVER (ORDER BY AVG(Calories) DESC) AS rnk\nFROM daily\nGROUP BY Id\nORDER BY rnk;",
+}
+
+
+def set_sql(text):
+    st.session_state["sql_text"] = text
+
+
+def same_result(a, b):
+    if a.shape != b.shape:
+        return False
+    for i in range(a.shape[1]):
+        x, y = a.iloc[:, i], b.iloc[:, i]
+        if pd.api.types.is_numeric_dtype(x) and pd.api.types.is_numeric_dtype(y):
+            if not np.allclose(x.astype(float), y.astype(float), atol=0.6, equal_nan=True):
+                return False
+        elif not (x.astype(str).values == y.astype(str).values).all():
+            return False
+    return True
+
+
 with tabs[4]:
-    st.write("Nine ready-made analyses (CTEs, CASE, LAG, RANK) plus a safe read-only editor. Tables: `daily`, `hourly`.")
-    key = st.selectbox("Analysis", list(QUERIES), format_func=lambda k_: QUERIES[k_][0])
-    st.info(QUERIES[key][1])
-    sql_text = st.text_area("SQL (SELECT / WITH only)", QUERIES[key][2].strip(), height=220)
-    if st.button("▶ Run query", type="primary"):
-        try:
-            res = run_query(sql_text)
-            st.dataframe(res, hide_index=True, width="stretch")
-            st.download_button("Download CSV", res.to_csv(index=False), f"{key}.csv")
-        except QueryError as e:
-            st.error(str(e))
+    ss = st.session_state
+    ss.setdefault("hist", [])
+    ss.setdefault("solved", set())
+    ss.setdefault("sql_text", SNIPPETS["Peek at the data"])
+    ss.setdefault("last", None)
+    st.markdown("### 🧪 SQL Playground")
+    left, right = st.columns([1, 3])
+
+    with right:
+        mode = st.radio("Mode", ["🧪 Free play", "🎯 Challenges", "📚 Query library"], horizontal=True, label_visibility="collapsed")
+        ch = None
+        if mode.startswith("🎯"):
+            st.progress(len(ss.solved) / len(CHALLENGES), text=f"{len(ss.solved)} / {len(CHALLENGES)} challenges solved")
+            ch = st.selectbox("Challenge", range(len(CHALLENGES)), format_func=lambda i: f"{'✅' if i in ss.solved else '⬜'} {CHALLENGES[i][0]}")
+            st.info(CHALLENGES[ch][1])
+            with st.expander("💡 Hint"):
+                st.code(CHALLENGES[ch][2], language="text")
+            with st.expander("🔓 Reveal solution"):
+                st.code(CHALLENGES[ch][3], language="sql")
+        elif mode.startswith("📚"):
+            key = st.selectbox("Analysis", list(QUERIES), format_func=lambda k_: QUERIES[k_][0])
+            st.info(QUERIES[key][1])
+            st.button("⬇ Load into editor", on_click=set_sql, args=(QUERIES[key][2].strip(),))
+
+        st.text_area("SQL editor (SELECT / WITH only)", key="sql_text", height=210)
+        b = st.columns([1, 1, 4])
+        run = b[0].button("▶ Run", type="primary")
+        check = b[1].button("✔ Check") if ch is not None else False
+
+        if run or check:
+            t0 = time.perf_counter()
+            try:
+                res = run_query(ss.sql_text)
+                ss.last = (res, (time.perf_counter() - t0) * 1000)
+                ss.hist = ([ss.sql_text] + [h for h in ss.hist if h != ss.sql_text])[:6]
+                if check:
+                    sol = run_query(CHALLENGES[ch][3])
+                    if same_result(res, sol):
+                        if ch not in ss.solved:
+                            ss.solved.add(ch)
+                            st.balloons()
+                        st.success("✅ Correct! Your result matches the expected answer.")
+                    else:
+                        st.error(f"Not quite: you returned {res.shape[0]} rows × {res.shape[1]} columns; the answer has {sol.shape[0]} × {sol.shape[1]}. Check the hint.")
+            except QueryError as e:
+                ss.last = None
+                st.error(str(e))
+
+        if ss.last is not None:
+            res, ms = ss.last
+            m = st.columns(3)
+            m[0].metric("Rows", f"{len(res):,}")
+            m[1].metric("Columns", res.shape[1])
+            m[2].metric("Runtime", f"{ms:.0f} ms")
+            if res.empty:
+                st.warning("Query ran but returned no rows.")
+            else:
+                view = st.radio("View as", ["Table", "Bar", "Line", "Scatter"], horizontal=True)
+                if view == "Table":
+                    st.dataframe(res, hide_index=True, width="stretch")
+                else:
+                    nums = list(res.select_dtypes("number").columns)
+                    if not nums:
+                        st.info("Need at least one numeric column to chart.")
+                    else:
+                        cx, cy = st.columns(2)
+                        xc = cx.selectbox("X", list(res.columns))
+                        yc = cy.selectbox("Y", nums, index=min(1, len(nums) - 1) if nums[0] == xc else 0)
+                        plot = res.assign(**{xc: res[xc].astype(str)}) if view == "Bar" else res
+                        fig = {"Bar": px.bar, "Line": px.line, "Scatter": px.scatter}[view](plot, x=xc, y=yc, color_discrete_sequence=[ORANGE])
+                        show(fig, 360)
+                st.download_button("⬇ Download CSV", res.to_csv(index=False), "query_result.csv")
+
+    with left:
+        st.markdown("#### 🗂️ Schema")
+        for t in ("daily", "hourly"):
+            try:
+                cols = list(run_query(f"SELECT * FROM {t} LIMIT 1").columns)
+                n_ = int(run_query(f"SELECT COUNT(*) AS n FROM {t}").n[0])
+                with st.expander(f"📋 {t} · {n_:,} rows", expanded=(t == "daily")):
+                    st.markdown(" ".join(f"`{c}`" for c in cols))
+            except Exception as e:  # noqa: BLE001
+                st.caption(f"{t}: {e}")
+        st.markdown("#### 🧰 Snippets")
+        sn = st.selectbox("Pattern", list(SNIPPETS), label_visibility="collapsed")
+        st.button("Insert pattern", on_click=set_sql, args=(SNIPPETS[sn],))
+        if ss.hist:
+            st.markdown("#### 🕘 History")
+            for i, h in enumerate(ss.hist):
+                st.button(" ".join(h.split())[:34] + "…", key=f"hist{i}", on_click=set_sql, args=(h,))
 
 # ============ ML Lab
 with tabs[5]:

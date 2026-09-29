@@ -1,6 +1,4 @@
-import random
 import time
-
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -103,6 +101,9 @@ section[data-testid="stSidebar"] {{background:#0D1320;border-right:1px solid rgb
 section[data-testid="stSidebar"] * {{color:#F3F4F6}}
 section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{color:#AEB6C4 !important}}
 </style>
+<div class="hero"><div class="kicker">STRAVA-STYLE FITNESS ANALYTICS</div><h1>Recovery Lab</h1>
+<p>33 real Fitbit athletes, 30 days of steps, sleep and heart rate. Does more movement mean better recovery? Explore it with SQL, statistics and ML.</p>
+<svg viewBox="0 0 600 80" preserveAspectRatio="none"><polyline points="{ECG}"/></svg></div>
 """, unsafe_allow_html=True)
 
 
@@ -174,11 +175,6 @@ except Exception as e:  # noqa: BLE001
     st.error(f"Could not load data: {e}")
     st.stop()
 
-ndays = (df.Date.max() - df.Date.min()).days + 1
-st.markdown(f"""<div class="hero"><div class="kicker">STRAVA-STYLE FITNESS ANALYTICS</div><h1>Recovery Lab</h1>
-<p>{df.Id.nunique()} real Fitbit athletes, {ndays} days of steps, sleep and heart rate. Does more movement mean better recovery? Tap a bar, badge or athlete to dig in.</p>
-<svg viewBox="0 0 600 80" preserveAspectRatio="none"><polyline points="{ECG}"/></svg></div>""", unsafe_allow_html=True)
-
 k = st.columns(5)
 k[0].metric("Athletes", df.Id.nunique())
 k[1].metric("User-days", f"{len(df):,}")
@@ -197,7 +193,6 @@ with tabs[0]:
     if st.session_state.get("aid") not in ids:
         st.session_state["aid"] = ids[0]
     aid = c1.selectbox("Pick an athlete", ids, format_func=lambda i: lab[i], key="aid")
-    c1.button("🎲 Surprise me", on_click=set_aid, args=(random.choice(ids),))
     goal = c2.slider("Daily step goal", 5000, 20000, 10000, 500)
     sgoal = c3.slider("Sleep goal (h)", 6.0, 9.0, 7.0, 0.5)
     a = df[df.Id == aid].sort_values("Date")
@@ -225,11 +220,6 @@ with tabs[0]:
         run_ = run_ + 1 if v_ else 0
         best_run = max(best_run, run_)
     hr_on = bool(a.HR_mean.notna().any())
-    mc = st.columns(4)
-    mc[0].metric("Goal days", f"{n_goal} / {len(a)}")
-    mc[1].metric("Best streak", f"{best_run} days")
-    mc[2].metric("Sleep-goal nights", f"{int((sl >= sgoal * 60).sum())} / {len(sl)}" if has_sleep else "—")
-    mc[3].metric("Peak day", f"{a.TotalSteps.max():,.0f} steps")
 
     hi_, lo_ = sleep_gap(df)
     tip = (f"You average <b>{steps:,.0f}</b> steps, <b>{goal - steps:,.0f}</b> short of your goal — a brisk 15-minute walk adds roughly 1,500."
@@ -247,14 +237,16 @@ with tabs[0]:
         "❤️ Heart-tracked": (hr_on, 1.0 if hr_on else 0.0, "Have heart-rate data recorded."),
     }
     b1, b2 = st.columns([3, 2])
+    b1.markdown('<div class="card"><b>BADGES</b><br>' + chip(f"🔥 Goal crusher · {n_goal} days", n_goal >= 3)
+                + chip("🌙 Sleep champion", has_sleep and pct_sleep >= .6) + chip("⚡ Intensity beast", very >= 20)
+                + chip("📅 Consistent · 28+ days", len(a) >= 28) + chip("❤️ Heart-tracked", hr_on) + "</div>",
+                unsafe_allow_html=True)
+    b2.markdown(f'<div class="card"><b>COACH SAYS</b><br>{tip}</div>', unsafe_allow_html=True)
     with b1:
-        st.markdown('<div class="card"><b>BADGES</b> — tap one to see how it is earned</div>', unsafe_allow_html=True)
-        pick = st.pills("Badges", list(BADGES), format_func=lambda n_: ("✅ " if BADGES[n_][0] else "🔒 ") + n_,
-                        label_visibility="collapsed", key=f"badge_{aid}")
+        pick = st.pills("Tap a badge to see how to earn it", list(BADGES), label_visibility="collapsed", key=f"badge_{aid}")
         if pick:
             ok_, prog_, rule_ = BADGES[pick]
-            st.progress(float(min(max(prog_, 0), 1)), text=("Earned! " if ok_ else "Not yet. ") + rule_)
-    b2.markdown(f'<div class="card"><b>COACH SAYS</b><br>{tip}</div>', unsafe_allow_html=True)
+            st.progress(float(min(max(prog_, 0), 1)), text=("Earned. " if ok_ else "Not yet. ") + rule_)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_bar(x=a.Date, y=a.TotalSteps, name="Steps", marker_color=[ORANGE if s >= goal else GREY for s in a.TotalSteps], secondary_y=False,
@@ -293,24 +285,12 @@ with tabs[0]:
                                 hovertemplate="%{y}, week of %{x}<br>%{z:,.0f} steps<extra></extra>"))
     heat.update_layout(title="Training calendar", yaxis=dict(autorange="reversed"))
     c1.plotly_chart(style(heat, 300), width="stretch")
-    M = {"Steps": "TotalSteps", "Very active": "VeryActiveMinutes", "Fairly active": "FairlyActiveMinutes",
-         "Lightly active": "LightlyActiveMinutes", "Calories": "Calories"}
-    coh = df[list(M.values())].mean()
-    rv = c2.selectbox("⚔️ Compare with", [None] + [i_ for i_ in ids if i_ != aid],
-                      format_func=lambda i_: "Cohort average only" if i_ is None else lab[i_])
-    th = list(M) + [list(M)[0]]
-
-    def pct(d_):
-        v_ = [d_[c_].mean() / coh[c_] * 100 for c_ in M.values()]
-        return v_ + v_[:1]
-    radar = go.Figure()
-    radar.add_scatterpolar(r=[100] * len(th), theta=th, name="Cohort avg", line=dict(color="white", dash="dash"))
-    if rv is not None:
-        radar.add_scatterpolar(r=pct(df[df.Id == rv]), theta=th, name=lab[rv], fill="toself", line=dict(color=TEAL))
-    radar.add_scatterpolar(r=pct(a), theta=th, name=lab[aid], fill="toself", line=dict(color=ORANGE))
-    radar.update_layout(title="Athlete vs cohort (100% = average)", polar=dict(bgcolor="rgba(255,255,255,.04)",
-                        radialaxis=dict(gridcolor="rgba(255,255,255,.15)", ticksuffix="%")))
-    c2.plotly_chart(style(radar, 340), width="stretch")
+    coh = {"Steps": df.TotalSteps.mean(), "Very-active min": df.VeryActiveMinutes.mean(), "Calories": df.Calories.mean()}
+    me = {"Steps": steps, "Very-active min": very, "Calories": a.Calories.mean()}
+    cmp_ = pd.DataFrame({"metric": list(coh), "pct_of_cohort": [me[m] / coh[m] * 100 for m in coh]})
+    f = bar(cmp_, "metric", "pct_of_cohort", "You vs cohort average (100% = average)")
+    f.add_hline(y=100, line_dash="dash", line_color="white")
+    c2.plotly_chart(style(f, 300), width="stretch")
     if a.HR_mean.notna().any():
         hr = go.Figure()
         for c, col in [("HR_max", ORANGE), ("HR_mean", LIME), ("HR_min", TEAL)]:
@@ -563,6 +543,7 @@ with tabs[6]:
     s = df.dropna(subset=["TotalMinutesAsleep"])
     hi, lo = sleep_gap(df)
     raw = get_data(False)
+    ndays = (df.Date.max() - df.Date.min()).days + 1
     nonwear = (1 - len(get_data(True)) / len(raw)) * 100
     n_all = raw.Id.nunique()
     n_sleep, n_hr = raw.dropna(subset=["TotalMinutesAsleep"]).Id.nunique(), raw.dropna(subset=["HR_mean"]).Id.nunique()

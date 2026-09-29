@@ -1,4 +1,3 @@
-"""Fitbit Recovery Lab — athletic-themed Streamlit dashboard (SQL + stats + ML)."""
 import numpy as np
 import pandas as pd
 import plotly.express as px
@@ -12,7 +11,7 @@ from src.db import QueryError, build_db, run_query
 from src.queries import QUERIES
 
 st.set_page_config(page_title="Fitbit Recovery Lab", page_icon="🔥", layout="wide")
-ORANGE, TEAL, LIME, GREY = "#FC4C02", "#14B8A6", "#A3E635", "#374151"
+ORANGE, TEAL, LIME, GREY = "#FC4C02", "#14B8A6", "#A3E635", "#6B7280"
 DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 
 TRACK = ("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='1400' height='900'><g fill='none' stroke='white' stroke-width='2'>"
@@ -23,34 +22,82 @@ ECG = " ".join(f"{b * 100 + x},{y}" for b in range(6) for x, y in BEAT)
 
 st.markdown(f"""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;600&display=swap');
-.stApp {{background: radial-gradient(1100px 600px at 90% -10%, rgba(252,76,2,.30), transparent 60%),
-  radial-gradient(900px 520px at -10% 35%, rgba(20,184,166,.20), transparent 55%), linear-gradient(180deg,#0B0F19,#04060B);
-  font-family:'Inter',sans-serif;}}
-.stApp:before {{content:"";position:fixed;inset:0;background:url("{TRACK}") center/cover no-repeat;opacity:.055;pointer-events:none;z-index:0}}
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;700&family=Inter:wght@400;500;600&display=swap');
+:root {{color-scheme:dark}}
+.stApp {{background: radial-gradient(1100px 600px at 90% -10%, rgba(252,76,2,.28), transparent 60%),
+  radial-gradient(900px 520px at -10% 35%, rgba(20,184,166,.16), transparent 55%), linear-gradient(180deg,#0B0F19,#04060B);
+  font-family:'Inter',sans-serif;color:#F3F4F6}}
+.stApp:before {{content:"";position:fixed;inset:0;background:url("{TRACK}") center/cover no-repeat;opacity:.04;pointer-events:none;z-index:0}}
 [data-testid="stHeader"] {{background:transparent}}
-h1,h2,h3 {{font-family:'Oswald',sans-serif !important;letter-spacing:.5px;text-transform:uppercase}}
-.hero {{position:relative;overflow:hidden;border-radius:22px;padding:34px 40px 26px;margin-bottom:18px;
-  background:linear-gradient(115deg,rgba(252,76,2,.92),rgba(140,30,0,.65) 55%,rgba(11,15,25,.35));
-  box-shadow:0 12px 40px rgba(252,76,2,.25)}}
-.hero .kicker {{font-family:Oswald;letter-spacing:4px;font-size:.85rem;opacity:.85}}
-.hero h1 {{font-size:3.4rem;margin:.1rem 0 .2rem;line-height:1;color:#fff}}
-.hero p {{max-width:640px;opacity:.92;margin:0}}
-.hero svg {{position:absolute;right:0;bottom:6px;width:58%;height:90px;opacity:.85}}
+.block-container {{padding-top:2.5rem;max-width:1250px}}
+
+/* ---------- READABILITY: force light text on the dark theme ---------- */
+.stApp p, .stApp li, .stApp label, .stApp span, .stApp td, .stApp th,
+[data-testid="stMarkdownContainer"], [data-testid="stWidgetLabel"] p, [data-testid="stWidgetLabel"] label {{color:#F3F4F6}}
+[data-testid="stWidgetLabel"] p, .stApp label p {{color:#E5E7EB !important;font-weight:600;font-size:.92rem}}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p, .stApp small {{color:#AEB6C4 !important}}
+h1,h2,h3,h4 {{font-family:'Oswald',sans-serif !important;letter-spacing:.6px;text-transform:uppercase;color:#FFFFFF !important}}
+h3 {{border-left:5px solid {ORANGE};padding-left:12px}}
+code {{background:rgba(252,76,2,.16) !important;color:#FFC9AD !important;border-radius:6px}}
+a {{color:#5EEAD4 !important}}
+
+/* ---------- HERO ---------- */
+.hero {{position:relative;overflow:hidden;border-radius:24px;padding:38px 44px 96px;margin-bottom:20px;
+  background:linear-gradient(115deg,#FC4C02 0%,#C2380A 45%,#3A1206 100%);
+  box-shadow:0 14px 44px rgba(252,76,2,.30);border:1px solid rgba(255,255,255,.14)}}
+.hero .kicker {{font-family:Oswald;letter-spacing:5px;font-size:.85rem;color:#FFE1D2 !important;font-weight:500}}
+.hero h1 {{font-size:4rem;margin:.15rem 0 .4rem;line-height:1;color:#fff !important;border:0;padding:0;text-shadow:0 2px 12px rgba(0,0,0,.35)}}
+.hero p {{max-width:720px;margin:0;color:#FFFFFF !important;font-size:1.05rem;line-height:1.55;text-shadow:0 1px 8px rgba(0,0,0,.45)}}
+.hero svg {{position:absolute;left:0;right:0;bottom:8px;width:100%;height:64px;opacity:.55}}
 .hero polyline {{fill:none;stroke:#fff;stroke-width:3;stroke-linejoin:round;stroke-dasharray:700;stroke-dashoffset:700;animation:ecg 3.2s linear infinite}}
 @keyframes ecg {{to {{stroke-dashoffset:-700}}}}
-[data-testid="stMetric"] {{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:14px 18px;backdrop-filter:blur(8px)}}
-[data-testid="stMetricValue"] {{font-family:Oswald;color:{ORANGE};font-size:2rem}}
-[data-testid="stMetricLabel"] {{text-transform:uppercase;letter-spacing:1px;font-size:.72rem;opacity:.75}}
-.stTabs [data-baseweb="tab-list"] {{gap:8px;flex-wrap:wrap}}
-.stTabs [data-baseweb="tab"] {{background:rgba(255,255,255,.06);border-radius:999px;padding:8px 18px;font-weight:600}}
-.stTabs [aria-selected="true"] {{background:{ORANGE};color:#fff}}
+
+/* ---------- KPI CARDS ---------- */
+[data-testid="stMetric"] {{background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.16);
+  border-radius:16px;padding:16px 20px;border-top:3px solid {ORANGE}}}
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] div {{font-family:Oswald;color:#FF7A33 !important;font-size:2.2rem}}
+[data-testid="stMetricLabel"], [data-testid="stMetricLabel"] p {{text-transform:uppercase;letter-spacing:1.2px;font-size:.76rem;color:#E5E7EB !important;opacity:1;font-weight:600}}
+
+/* ---------- TABS ---------- */
+.stTabs [data-baseweb="tab-list"] {{gap:8px;flex-wrap:wrap;margin:8px 0 14px}}
+.stTabs [data-baseweb="tab"] {{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:8px 18px;height:auto}}
+.stTabs [data-baseweb="tab"] p {{color:#E5E7EB !important;font-weight:600}}
+.stTabs [data-baseweb="tab"]:hover {{background:rgba(252,76,2,.25)}}
+.stTabs [aria-selected="true"] {{background:{ORANGE} !important;border-color:{ORANGE}}}
+.stTabs [aria-selected="true"] p {{color:#fff !important}}
 .stTabs [data-baseweb="tab-highlight"],.stTabs [data-baseweb="tab-border"] {{display:none}}
-.card {{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);border-radius:16px;padding:16px 20px;backdrop-filter:blur(8px)}}
+
+/* ---------- INPUTS ---------- */
+[data-baseweb="select"] > div, [data-baseweb="input"] > div, .stTextArea textarea, .stNumberInput input {{
+  background:#111827 !important;color:#F9FAFB !important;border:1px solid rgba(255,255,255,.22) !important;border-radius:10px !important}}
+[data-baseweb="select"] *, .stTextArea textarea {{color:#F9FAFB !important}}
+[data-baseweb="select"] svg {{fill:#F9FAFB !important}}
+[data-baseweb="popover"] ul, [data-baseweb="menu"] {{background:#111827 !important}}
+[data-baseweb="popover"] li, [data-baseweb="menu"] li {{color:#F9FAFB !important;background:#111827 !important}}
+[data-baseweb="popover"] li:hover {{background:rgba(252,76,2,.30) !important}}
+[data-testid="stSlider"] [data-testid="stTickBarMin"], [data-testid="stSlider"] [data-testid="stTickBarMax"] {{color:#AEB6C4 !important}}
+[data-testid="stSlider"] [role="slider"] {{background:{ORANGE} !important}}
+[data-testid="stThumbValue"] {{color:#FFB08A !important;font-weight:700}}
+.stRadio label p, .stCheckbox label p, .stToggle label p {{color:#F3F4F6 !important}}
+.stButton button, .stDownloadButton button {{border-radius:10px;font-weight:700;border:1px solid rgba(255,255,255,.25);background:#1F2937;color:#fff}}
+.stButton button[kind="primary"] {{background:{ORANGE};border-color:{ORANGE};color:#fff}}
+.stButton button:hover, .stDownloadButton button:hover {{border-color:{ORANGE};color:#fff}}
+
+/* ---------- ALERTS, CARDS, CHIPS ---------- */
+[data-testid="stAlert"] {{background:rgba(255,255,255,.07) !important;border:1px solid rgba(255,255,255,.16);border-radius:12px}}
+[data-testid="stAlert"] p, [data-testid="stAlert"] div {{color:#F3F4F6 !important}}
+[data-testid="stExpander"] {{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.14);border-radius:12px}}
+[data-testid="stExpander"] summary p {{color:#F3F4F6 !important;font-weight:600}}
+.card {{background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:16px 20px;color:#F3F4F6;line-height:1.6}}
+.card b {{font-family:Oswald;letter-spacing:1.5px;color:#FF7A33}}
 .chip {{display:inline-block;padding:6px 14px;border-radius:999px;margin:4px 6px 4px 0;font-weight:600;font-size:.85rem;border:1px solid}}
-.chip.on {{background:rgba(252,76,2,.18);border-color:{ORANGE};color:#FFB08A}}
-.chip.off {{border-color:#374151;color:#6B7280}}
-section[data-testid="stSidebar"] {{background:rgba(9,12,20,.92);border-right:1px solid rgba(255,255,255,.08)}}
+.chip.on {{background:rgba(252,76,2,.22);border-color:{ORANGE};color:#FFD2B8}}
+.chip.off {{border-color:#4B5563;color:#9CA3AF;background:rgba(255,255,255,.03)}}
+
+/* ---------- SIDEBAR ---------- */
+section[data-testid="stSidebar"] {{background:#0D1320;border-right:1px solid rgba(255,255,255,.12)}}
+section[data-testid="stSidebar"] * {{color:#F3F4F6}}
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{color:#AEB6C4 !important}}
 </style>
 <div class="hero"><div class="kicker">STRAVA-STYLE FITNESS ANALYTICS</div><h1>Recovery Lab</h1>
 <p>33 real Fitbit athletes, 30 days of steps, sleep and heart rate. Does more movement mean better recovery? Explore it with SQL, statistics and ML.</p>
@@ -60,10 +107,11 @@ section[data-testid="stSidebar"] {{background:rgba(9,12,20,.92);border-right:1px
 
 def style(fig, h=340):
     fig.update_layout(template="plotly_dark", paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=h,
-                      margin=dict(t=48, b=10, l=10, r=10), font=dict(family="Inter", color="#E5E7EB"),
-                      colorway=[ORANGE, TEAL, LIME, "#F59E0B", "#8B5CF6"], title_font=dict(family="Oswald", size=17))
-    fig.update_xaxes(gridcolor="rgba(255,255,255,.06)")
-    fig.update_yaxes(gridcolor="rgba(255,255,255,.06)")
+                      margin=dict(t=48, b=10, l=10, r=10), font=dict(family="Inter", size=13, color="#F3F4F6"),
+                      colorway=[ORANGE, TEAL, LIME, "#F59E0B", "#8B5CF6"], title_font=dict(family="Oswald", size=19, color="#FFFFFF"),
+                      legend=dict(font=dict(color="#F3F4F6")))
+    fig.update_xaxes(gridcolor="rgba(255,255,255,.10)", tickfont=dict(color="#E5E7EB"), title_font=dict(color="#E5E7EB"))
+    fig.update_yaxes(gridcolor="rgba(255,255,255,.10)", tickfont=dict(color="#E5E7EB"), title_font=dict(color="#E5E7EB"))
     return fig
 
 
@@ -319,4 +367,3 @@ with tabs[6]:
 
 *Limitations: 33 users, 30 days, pooled user-days, observational data (no causality).*
 """)
-    

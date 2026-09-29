@@ -85,6 +85,12 @@ a {{color:#5EEAD4 !important}}
 .stButton button:hover, .stDownloadButton button:hover {{border-color:{ORANGE};color:#fff}}
 
 .stTextArea textarea {{font-family:'JetBrains Mono',Consolas,monospace !important;font-size:.92rem;line-height:1.55;background:#0A0F1A !important;border-left:4px solid {ORANGE} !important}}
+/* ---------- BADGE PILLS (clickable chips) ---------- */
+.st-key-badgebox {{background:linear-gradient(160deg,rgba(255,255,255,.09),rgba(255,255,255,.03));border:1px solid rgba(255,255,255,.16);border-radius:16px;padding:16px 20px}}
+.st-key-badgebox button {{border-radius:999px !important;font-weight:600;font-size:.85rem;background:rgba(255,255,255,.03) !important;border:1px solid #4B5563 !important;color:#9CA3AF !important}}
+.st-key-badgebox button p {{color:inherit !important}}
+.st-key-badgebox button:hover {{border-color:{ORANGE} !important;color:#FFD2B8 !important}}
+.st-key-badgebox button[kind="pillsActive"], .st-key-badgebox [data-testid="stBaseButton-pillsActive"] {{background:rgba(252,76,2,.22) !important;border-color:{ORANGE} !important;color:#FFD2B8 !important}}
 /* ---------- ALERTS, CARDS, CHIPS ---------- */
 [data-testid="stAlert"] {{background:rgba(255,255,255,.07) !important;border:1px solid rgba(255,255,255,.16);border-radius:12px}}
 [data-testid="stAlert"] p, [data-testid="stAlert"] div {{color:#F3F4F6 !important}}
@@ -237,16 +243,16 @@ with tabs[0]:
         "❤️ Heart-tracked": (hr_on, 1.0 if hr_on else 0.0, "Have heart-rate data recorded."),
     }
     b1, b2 = st.columns([3, 2])
-    b1.markdown('<div class="card"><b>BADGES</b><br>' + chip(f"🔥 Goal crusher · {n_goal} days", n_goal >= 3)
-                + chip("🌙 Sleep champion", has_sleep and pct_sleep >= .6) + chip("⚡ Intensity beast", very >= 20)
-                + chip("📅 Consistent · 28+ days", len(a) >= 28) + chip("❤️ Heart-tracked", hr_on) + "</div>",
-                unsafe_allow_html=True)
-    b2.markdown(f'<div class="card"><b>COACH SAYS</b><br>{tip}</div>', unsafe_allow_html=True)
-    with b1:
-        pick = st.pills("Tap a badge to see how to earn it", list(BADGES), label_visibility="collapsed", key=f"badge_{aid}")
+    LBL = {"🔥 Goal crusher": f"🔥 Goal crusher · {n_goal} days", "🌙 Sleep champion": "🌙 Sleep champion",
+           "⚡ Intensity beast": "⚡ Intensity beast", "📅 Consistent": "📅 Consistent · 28+ days", "❤️ Heart-tracked": "❤️ Heart-tracked"}
+    with b1.container(key="badgebox"):
+        st.markdown('<b style="font-family:Oswald;letter-spacing:1.5px;color:#FF7A33">BADGES</b> <span style="color:#AEB6C4;font-size:.85rem">· tap one to see how to earn it</span>', unsafe_allow_html=True)
+        pick = st.pills("Badges", list(BADGES), format_func=lambda n_: ("" if BADGES[n_][0] else "🔒 ") + LBL[n_],
+                        label_visibility="collapsed", key=f"badge_{aid}")
         if pick:
             ok_, prog_, rule_ = BADGES[pick]
             st.progress(float(min(max(prog_, 0), 1)), text=("Earned. " if ok_ else "Not yet. ") + rule_)
+    b2.markdown(f'<div class="card"><b>COACH SAYS</b><br>{tip}</div>', unsafe_allow_html=True)
 
     fig = make_subplots(specs=[[{"secondary_y": True}]])
     fig.add_bar(x=a.Date, y=a.TotalSteps, name="Steps", marker_color=[ORANGE if s >= goal else GREY for s in a.TotalSteps], secondary_y=False,
